@@ -1,0 +1,23 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Local Claude Code artifacts (machine-specific settings, local memory)
+.claude/
+CLAUDE.local.md
+
+# Editors
+.idea/
+.vscode/
+
+# Local skill-zip builds (CI builds the release zip)
+*.zip
+
+# Secrets / local env
+.env
+.env.*
+
+# Future tooling
+node_modules/
+
+.gitignore

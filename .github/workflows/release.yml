@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'storesynk-audit--v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag, plugin.json, and SKILL.md versions agree
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#storesynk-audit--v}"
+          PLUGIN_VERSION=$(jq -r .version .claude-plugin/plugin.json)
+          SKILL_VERSION=$(grep -oE 'This skill is version \*\*[0-9]+\.[0-9]+\.[0-9]+\*\*' skills/storesynk-audit/SKILL.md | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          if [ "$TAG_VERSION" != "$PLUGIN_VERSION" ]; then
+            echo "Tag version ($TAG_VERSION) does not match plugin.json version ($PLUGIN_VERSION)" >&2
+            exit 1
+          fi
+          if [ "$SKILL_VERSION" != "$PLUGIN_VERSION" ]; then
+            echo "SKILL.md version ($SKILL_VERSION) does not match plugin.json version ($PLUGIN_VERSION)" >&2
+            exit 1
+          fi
+
+      - name: Build skill zip for claude.ai upload
+        run: |
+          cd skills
+          zip -r ../storesynk-audit.zip storesynk-audit
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" storesynk-audit.zip \
+            --title "Storesynk Audit v${GITHUB_REF_NAME#storesynk-audit--v}" \
+            --generate-notes

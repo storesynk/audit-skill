@@ -1,0 +1,20 @@
+{
+  "name": "storesynk-audit",
+  "version": "1.0.0",
+  "description": "Audit and debug Storesynk (Webflow + Shopify) builds — structural rules, attribute reference, and known-issue diagnostics for live sites.",
+  "author": {
+    "name": "Storesynk",
+    "email": "hello@storesynk.com",
+    "url": "https://www.storesynk.com"
+  },
+  "homepage": "https://www.storesynk.com/docs-home",
+  "repository": "https://github.com/storesynk/audit-skill",
+  "keywords": [
+    "storesynk",
+    "webflow",
+    "shopify",
+    "audit",
+    "debugging",
+    "ecommerce"
+  ]
+}
