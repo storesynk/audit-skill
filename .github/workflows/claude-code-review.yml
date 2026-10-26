@@ -1,0 +1,85 @@
+name: Fünf Claude Review
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, reopened]
+    # Optional: Only run on specific file changes
+    # paths:
+    #   - "src/**/*.ts"
+    #   - "src/**/*.tsx"
+    #   - "src/**/*.js"
+    #   - "src/**/*.jsx"
+  # A PR comment starting with "@claude review", by someone with write access,
+  # runs the same review on demand (also on fork PRs, which pull_request skips).
+  issue_comment:
+    types: [created]
+
+jobs:
+  # Claude Code loads .claude/, CLAUDE.md and .mcp.json from the checked-out PR,
+  # so a PR from anyone but araskavakli that changes them could steer Claude or
+  # run hooks while the OAuth token is available. Refuse those PRs.
+  guard:
+    name: Claude config guard
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event.issue.pull_request &&
+       startsWith(github.event.comment.body, '@claude review') &&
+       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      issues: write # To explain on the PR why Claude did not run
+    steps:
+      - name: Refuse outside PRs that change Claude config
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          author=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .user.login)
+          [ "$author" = araskavakli ] && exit 0
+          touched=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --jq '.[].filename' \
+            | grep -E '^\.claude/|^\.mcp\.json$|(^|/)CLAUDE\.md$' || true)
+          [ -z "$touched" ] && exit 0
+          echo "::error::PR by $author changes Claude config: $(echo "$touched" | tr "\n" " ")"
+          gh pr comment "$PR_NUMBER" -R "$GITHUB_REPOSITORY" --body "Claude did not run: this PR changes Claude configuration (\`.claude/\`, \`CLAUDE.md\` or \`.mcp.json\`), which only @araskavakli may change in PRs that Claude works on.
+
+          $(echo "$touched" | sed 's/^/- `/; s/$/`/')"
+          exit 1
+
+  claude-review:
+    name: Fünf Claude Review
+    needs: guard
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+
+    steps:
+      # issue_comment runs on the default branch, so check out the PR's merge
+      # commit explicitly; fetch-depth 2 keeps the base available as HEAD^1.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/merge', github.event.issue.number) || '' }}
+          fetch-depth: 2
+
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
+          plugins: 'code-review@claude-code-plugins'
+          prompt: '/code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number || github.event.issue.number }}'
+          # Temporary: logs every tool call so denied commands show up. Remove
+          # once reviews post comments again.
+          show_full_output: true
+          # CLAUDE.md tells reviewers to read the diff with git diff, which the
+          # code-review plugin does not allow on its own, so allow it here.
+          claude_args: >-
+            --model ${{ (github.event.pull_request.user.login || github.event.issue.user.login) == 'araskavakli' && 'opus' || 'fable' }}
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(gh pr diff:*),Bash(gh pr view:*),Read,Grep,Glob"
+          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
+          # or https://code.claude.com/docs/en/cli-reference for available options

@@ -1,0 +1,80 @@
+name: Claude Code
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened, assigned]
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  # Claude Code loads .claude/, CLAUDE.md and .mcp.json from the checked-out PR,
+  # so a PR from anyone but araskavakli that changes them could steer Claude or
+  # run hooks while the OAuth token is available. Refuse those PRs.
+  # PR comments starting with "@claude review" go to claude-code-review.yml instead.
+  guard:
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude') &&
+       !(github.event.issue.pull_request && startsWith(github.event.comment.body, '@claude review'))) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      issues: write # To explain on the PR why Claude did not run
+    steps:
+      - name: Refuse outside PRs that change Claude config
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.issue.pull_request && github.event.issue.number || github.event.pull_request.number }}
+        run: |
+          [ -n "$PR_NUMBER" ] || exit 0
+          author=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .user.login)
+          [ "$author" = araskavakli ] && exit 0
+          touched=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --jq '.[].filename' \
+            | grep -E '^\.claude/|^\.mcp\.json$|(^|/)CLAUDE\.md$' || true)
+          [ -z "$touched" ] && exit 0
+          echo "::error::PR by $author changes Claude config: $(echo "$touched" | tr "\n" " ")"
+          gh pr comment "$PR_NUMBER" -R "$GITHUB_REPOSITORY" --body "Claude did not run: this PR changes Claude configuration (\`.claude/\`, \`CLAUDE.md\` or \`.mcp.json\`), which only @araskavakli may change in PRs that Claude works on.
+
+          $(echo "$touched" | sed 's/^/- `/; s/$/`/')"
+          exit 1
+
+  claude:
+    needs: guard
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+      actions: read # Required for Claude to read CI results on PRs
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+          # This is an optional setting that allows Claude to read CI results on PRs
+          additional_permissions: |
+            actions: read
+
+          # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
+          # prompt: 'Update the pull request description to include a summary of changes.'
+
+          # Model: "#fable" or "#sonnet" anywhere in the triggering text picks that
+          # model (case-insensitive); otherwise opus. Aliases follow the newest model.
+          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
+          # or https://code.claude.com/docs/en/cli-reference for available options
+          claude_args: >-
+            --model ${{ contains(github.event.comment.body || github.event.review.body || github.event.issue.body, '#fable') && 'fable' || contains(github.event.comment.body || github.event.review.body || github.event.issue.body, '#sonnet') && 'sonnet' || 'opus' }}
